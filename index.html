@@ -25,33 +25,6 @@
         #code-output::-webkit-scrollbar-thumb:hover {
             background: #555;
         }
-        .loading-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(255, 255, 255, 0.9); /* Slightly more opaque */
-            display: flex;
-            flex-direction: column; /* Stack spinner and text */
-            justify-content: center;
-            align-items: center;
-            z-index: 10;
-            border-radius: 0.5rem; /* rounded-lg */
-            gap: 1rem; /* Space between spinner and text */
-            transition: opacity 0.3s ease; /* Smooth transition for hiding */
-        }
-        .spinner {
-            border: 4px solid rgba(0, 0, 0, 0.1);
-            border-left-color: #6366f1; /* indigo-500 */
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
     </style>
 </head>
 <body class="min-h-screen bg-gradient-to-br from-purple-500 to-indigo-700 flex items-center justify-center p-4">
@@ -61,9 +34,9 @@
             Simple Code Interpreter
         </h1>
 
-        <div class="text-sm text-gray-600 text-center">
+        <!-- <div class="text-sm text-gray-600 text-center">
             Your User ID: <span id="userIdDisplay" class="font-mono text-gray-800">Loading...</span>
-        </div>
+        </div> -->
 
         <button
             id="toggleAddCommandBtn"
@@ -107,7 +80,7 @@
             <textarea
                 id="code-input"
                 class="w-full p-4 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-gray-800 bg-gray-50 resize-y min-h-[150px]"
-                placeholder='~~ tell xinyuan to add a command. it will be immediate since no code needs to be change when adding command. ~~Example:
+                placeholder='Example:
 PRINT "Hello, NUSH!"
 SQUAREROOT 81
 FOR 3 REPEAT LAUGH
@@ -121,7 +94,7 @@ DIVIDE 10 2
 LAUGH
 DANCE
 
-Try your custom commands here!'
+Add custom commands using the hidden dot at the top right (if you can see it)!'
                 rows="10"
             ></textarea>
         </div>
@@ -147,31 +120,17 @@ Try your custom commands here!'
             </div>
         </div>
 
-        <div id="loadingOverlay" class="loading-overlay">
+        <!-- <div id="loadingOverlay" class="loading-overlay">
             <div class="spinner"></div>
             <span id="loadingMessage" class="text-gray-800 font-semibold text-lg">Initializing...</span>
             <div class="text-gray-700 text-center text-sm mt-2">
                 <p>If stuck, check your browser console (F12) for Firebase errors.</p>
                 <p>Ensure Firebase project is set up: Authentication (Anonymous enabled), Firestore enabled, and Firestore Rules allow read/write to `artifacts/{appId}/public/data/customCommands`.</p>
             </div>
-        </div>
+        </div> -->
     </div>
 
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Global variables provided by the Canvas environment
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-        let app, db, auth;
-        let currentUserId = null;
-        let isAuthReady = false;
-        let unsubscribeFirestore = null; // To store the Firestore unsubscribe function
-
+    <script>
         // Get references to DOM elements
         const codeInput = document.getElementById('code-input');
         const runCodeBtn = document.getElementById('runCodeBtn');
@@ -181,31 +140,10 @@ Try your custom commands here!'
         const newCommandNameInput = document.getElementById('new-command-name');
         const newCommandOutputInput = document.getElementById('new-command-output');
         const addCustomCommandBtn = document.getElementById('addCustomCommandBtn');
-        const userIdDisplay = document.getElementById('userIdDisplay');
-        const loadingOverlay = document.getElementById('loadingOverlay');
-        const loadingMessageSpan = document.getElementById('loadingMessage'); // New span for loading message
 
-
-        /**
-         * Shows or hides the loading overlay with a message.
-         * @param {boolean} show True to show, false to hide.
-         * @param {string} message The message to display.
-         */
-        const toggleLoading = (show, message = 'Loading...') => {
-            loadingMessageSpan.textContent = message;
-            if (show) {
-                loadingOverlay.classList.remove('hidden');
-                loadingOverlay.style.opacity = '1';
-            } else {
-                // Add a small delay for a smoother transition out
-                loadingOverlay.style.opacity = '0';
-                setTimeout(() => {
-                    loadingOverlay.classList.add('hidden');
-                    // Ensure message is cleared or reset for next time
-                    loadingMessageSpan.textContent = 'Initializing...';
-                }, 300);
-            }
-        };
+        // Object to store custom commands (now local to the browser session)
+        let customCommands = {};
+        let showAddCommandSection = false; // State to manage visibility
 
         /**
          * Scrolls the output area to the bottom.
@@ -230,9 +168,9 @@ Try your custom commands here!'
         };
 
         /**
-         * Adds a new custom command to the interpreter and saves it to Firestore.
+         * Adds a new custom command to the interpreter.
          */
-        const addCustomCommand = async () => {
+        const addCustomCommand = () => {
             const commandName = newCommandNameInput.value.trim().toUpperCase();
             const commandOutput = newCommandOutputInput.value.trim();
 
@@ -248,32 +186,11 @@ Try your custom commands here!'
                 return;
             }
 
-            if (!isAuthReady || !currentUserId) {
-                appendOutput("ERROR: Authentication not ready. Please wait or refresh.", true);
-                return;
-            }
-
-            toggleLoading(true, "Adding command...");
-            try {
-                // Store in a public collection
-                const customCommandsColRef = collection(db, `artifacts/${appId}/public/data/customCommands`);
-                await addDoc(customCommandsColRef, {
-                    commandName: commandName,
-                    commandOutput: commandOutput,
-                    createdAt: new Date(),
-                    createdBy: currentUserId
-                });
-                newCommandNameInput.value = '';
-                newCommandOutputInput.value = '';
-                // Output will be updated by onSnapshot listener
-                appendOutput(`Custom command '${commandName}' sent for addition.`);
-            } catch (e) {
-                console.error("Error adding document: ", e);
-                appendOutput(`ERROR: Failed to add custom command. ${e.message}`, true);
-            } finally {
-                // Loading will be toggled off by onSnapshot's first data load or error handler
-                // For now, let onSnapshot handle it to indicate data sync.
-            }
+            // Store the custom command locally
+            customCommands[commandName] = commandOutput;
+            newCommandNameInput.value = '';
+            newCommandOutputInput.value = '';
+            appendOutput(`Custom command '${commandName}' added successfully! (Local only)`);
         };
 
         /**
@@ -427,78 +344,10 @@ Try your custom commands here!'
             }
         });
 
-        // Initialize Firebase and Authentication
-        const initializeFirebaseAndAuth = () => {
-            toggleLoading(true, "Initializing Firebase...");
-            try {
-                // Ensure firebaseConfig is not empty
-                if (Object.keys(firebaseConfig).length === 0) {
-                    throw new Error("Firebase config is empty. Please ensure __firebase_config is provided.");
-                }
-
-                app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-
-                onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        currentUserId = user.uid;
-                        userIdDisplay.textContent = currentUserId;
-                        isAuthReady = true;
-
-                        // Stop previous listener if exists
-                        if (unsubscribeFirestore) {
-                            unsubscribeFirestore();
-                        }
-
-                        // Start listening for custom commands once authenticated
-                        toggleLoading(true, "Fetching shared commands...");
-                        const customCommandsColRef = collection(db, `artifacts/${appId}/public/data/customCommands`);
-                        unsubscribeFirestore = onSnapshot(query(customCommandsColRef), (snapshot) => {
-                            const fetchedCommands = {};
-                            snapshot.forEach((doc) => {
-                                const data = doc.data();
-                                fetchedCommands[data.commandName] = data.commandOutput;
-                            });
-                            customCommands = fetchedCommands;
-                            appendOutput("Custom commands synchronized from shared storage.");
-                            toggleLoading(false, "Ready!"); // Hide loading after data sync
-                        }, (error) => {
-                            console.error("Error fetching custom commands: ", error);
-                            appendOutput(`ERROR: Failed to synchronize custom commands: ${error.message}`, true);
-                            toggleLoading(false, "Error loading commands."); // Hide loading on error
-                        });
-                    } else {
-                        // Sign in anonymously if no user is authenticated
-                        try {
-                            toggleLoading(true, "Authenticating...");
-                            if (initialAuthToken) {
-                                await signInWithCustomToken(auth, initialAuthToken);
-                            } else {
-                                await signInAnonymously(auth);
-                            }
-                        } catch (error) {
-                            console.error("Error during anonymous sign-in:", error);
-                            appendOutput(`ERROR: Authentication failed: ${error.message}`, true);
-                            toggleLoading(false, "Authentication failed.");
-                        }
-                    }
-                });
-            } catch (initError) {
-                console.error("Firebase Initialization Error:", initError);
-                appendOutput(`CRITICAL ERROR: Firebase initialization failed. ${initError.message}. Check your Firebase config.`, true);
-                toggleLoading(false, "Initialization failed.");
-            }
-        };
-
-
         // Initial state for output area
         if (codeOutput.innerHTML.trim() === '') {
             codeOutput.innerHTML = '<span class="text-gray-500">Your output will appear here...</span>';
         }
-
-        // Call the initialization function when the script loads
-        initializeFirebaseAndAuth();
     </script>
 </body>
 </html>
