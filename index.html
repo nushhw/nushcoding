@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NUSH LANGUAGE INTERPRETER!</title>
+    <title>NUSH CODING INTERPRETER</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
@@ -25,6 +25,30 @@
         #code-output::-webkit-scrollbar-thumb:hover {
             background: #555;
         }
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            border-radius: 0.5rem; /* rounded-lg */
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-left-color: #6366f1; /* indigo-500 */
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body class="min-h-screen bg-gradient-to-br from-purple-500 to-indigo-700 flex items-center justify-center p-4">
@@ -33,6 +57,10 @@
         <h1 class="text-3xl font-bold text-center text-gray-800 mb-4">
             Simple Code Interpreter
         </h1>
+
+        <div class="text-sm text-gray-600 text-center">
+            Your User ID: <span id="userIdDisplay" class="font-mono text-gray-800">Loading...</span>
+        </div>
 
         <button
             id="toggleAddCommandBtn"
@@ -63,7 +91,7 @@
             </div>
             <button
                 id="addCustomCommandBtn"
-                class="w-full bg-purple-600 text-white py-2 px-4 rounded-md text-md font-semibold hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 shadow-md"
+                class="w-full bg-purple-600 text-white py-3 px-6 rounded-md text-xl font-semibold hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition duration-300 ease-in-out transform hover:scale-105 shadow-md"
             >
                 Add Custom Command
             </button>
@@ -76,7 +104,7 @@
             <textarea
                 id="code-input"
                 class="w-full p-4 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-gray-800 bg-gray-50 resize-y min-h-[150px]"
-                placeholder='**this code supports new commands without code editing. please let xinyuan know if you want new command. **Example:
+                placeholder='~~ tell xinyuan for a command. a command can be added without changing code, so it will be immediate ~~ Example:
 PRINT "Hello, NUSH!"
 SQUAREROOT 81
 FOR 3 REPEAT LAUGH
@@ -115,9 +143,27 @@ Try your custom commands here!'
                 <span class="text-gray-500">Your output will appear here...</span>
             </div>
         </div>
+
+        <div id="loadingOverlay" class="loading-overlay hidden">
+            <div class="spinner"></div>
+        </div>
     </div>
 
-    <script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
         // Get references to DOM elements
         const codeInput = document.getElementById('code-input');
         const runCodeBtn = document.getElementById('runCodeBtn');
@@ -127,10 +173,26 @@ Try your custom commands here!'
         const newCommandNameInput = document.getElementById('new-command-name');
         const newCommandOutputInput = document.getElementById('new-command-output');
         const addCustomCommandBtn = document.getElementById('addCustomCommandBtn');
+        const userIdDisplay = document.getElementById('userIdDisplay');
+        const loadingOverlay = document.getElementById('loadingOverlay');
 
         // Object to store custom commands
         let customCommands = {};
         let showAddCommandSection = false; // State to manage visibility
+        let currentUserId = null;
+        let isAuthReady = false;
+
+        /**
+         * Shows or hides the loading overlay.
+         * @param {boolean} show True to show, false to hide.
+         */
+        const toggleLoading = (show) => {
+            if (show) {
+                loadingOverlay.classList.remove('hidden');
+            } else {
+                loadingOverlay.classList.add('hidden');
+            }
+        };
 
         /**
          * Scrolls the output area to the bottom.
@@ -155,9 +217,9 @@ Try your custom commands here!'
         };
 
         /**
-         * Adds a new custom command to the interpreter.
+         * Adds a new custom command to the interpreter and saves it to Firestore.
          */
-        const addCustomCommand = () => {
+        const addCustomCommand = async () => {
             const commandName = newCommandNameInput.value.trim().toUpperCase();
             const commandOutput = newCommandOutputInput.value.trim();
 
@@ -173,10 +235,30 @@ Try your custom commands here!'
                 return;
             }
 
-            customCommands[commandName] = commandOutput;
-            newCommandNameInput.value = '';
-            newCommandOutputInput.value = '';
-            appendOutput(`Custom command '${commandName}' added successfully!`);
+            if (!isAuthReady || !currentUserId) {
+                appendOutput("ERROR: Authentication not ready. Please wait or refresh.", true);
+                return;
+            }
+
+            toggleLoading(true);
+            try {
+                // Store in a public collection
+                const customCommandsColRef = collection(db, `artifacts/${appId}/public/data/customCommands`);
+                await addDoc(customCommandsColRef, {
+                    commandName: commandName,
+                    commandOutput: commandOutput,
+                    createdAt: new Date(),
+                    createdBy: currentUserId
+                });
+                newCommandNameInput.value = '';
+                newCommandOutputInput.value = '';
+                appendOutput(`Custom command '${commandName}' added successfully!`);
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                appendOutput(`ERROR: Failed to add custom command. ${e.message}`, true);
+            } finally {
+                toggleLoading(false);
+            }
         };
 
         /**
@@ -327,6 +409,44 @@ Try your custom commands here!'
                 addCommandSection.classList.remove('hidden');
             } else {
                 addCommandSection.classList.add('hidden');
+            }
+        });
+
+        // Firebase Authentication and Data Loading
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                currentUserId = user.uid;
+                userIdDisplay.textContent = currentUserId;
+                isAuthReady = true;
+                // Start listening for custom commands once authenticated
+                const customCommandsColRef = collection(db, `artifacts/${appId}/public/data/customCommands`);
+                onSnapshot(query(customCommandsColRef), (snapshot) => {
+                    const fetchedCommands = {};
+                    snapshot.forEach((doc) => {
+                        const data = doc.data();
+                        fetchedCommands[data.commandName] = data.commandOutput;
+                    });
+                    customCommands = fetchedCommands;
+                    appendOutput("Custom commands synchronized from shared storage.");
+                }, (error) => {
+                    console.error("Error fetching custom commands: ", error);
+                    appendOutput(`ERROR: Failed to synchronize custom commands: ${error.message}`, true);
+                });
+            } else {
+                // Sign in anonymously if no user is authenticated
+                try {
+                    toggleLoading(true);
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    console.error("Error during anonymous sign-in:", error);
+                    appendOutput(`ERROR: Authentication failed: ${error.message}`, true);
+                } finally {
+                    toggleLoading(false);
+                }
             }
         });
 
