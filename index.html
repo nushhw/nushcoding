@@ -107,7 +107,7 @@
             <textarea
                 id="code-input"
                 class="w-full p-4 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-gray-800 bg-gray-50 resize-y min-h-[150px]"
-                placeholder='~~ tell xinyuan to add a command. it will be immediate since no code needs to be change when adding command. ~~ Example:
+                placeholder='~~ tell xinyuan to add a command. it will be immediate since no code needs to be change when adding command. ~~Example:
 PRINT "Hello, NUSH!"
 SQUAREROOT 81
 FOR 3 REPEAT LAUGH
@@ -149,7 +149,11 @@ Try your custom commands here!'
 
         <div id="loadingOverlay" class="loading-overlay">
             <div class="spinner"></div>
-            <span id="loadingMessage" class="text-gray-800 font-semibold text-lg">Loading...</span>
+            <span id="loadingMessage" class="text-gray-800 font-semibold text-lg">Initializing...</span>
+            <div class="text-gray-700 text-center text-sm mt-2">
+                <p>If stuck, check your browser console (F12) for Firebase errors.</p>
+                <p>Ensure Firebase project is set up: Authentication (Anonymous enabled), Firestore enabled, and Firestore Rules allow read/write to `artifacts/{appId}/public/data/customCommands`.</p>
+            </div>
         </div>
     </div>
 
@@ -163,10 +167,10 @@ Try your custom commands here!'
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-        // Initialize Firebase
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-        const auth = getAuth(app);
+        let app, db, auth;
+        let currentUserId = null;
+        let isAuthReady = false;
+        let unsubscribeFirestore = null; // To store the Firestore unsubscribe function
 
         // Get references to DOM elements
         const codeInput = document.getElementById('code-input');
@@ -181,12 +185,6 @@ Try your custom commands here!'
         const loadingOverlay = document.getElementById('loadingOverlay');
         const loadingMessageSpan = document.getElementById('loadingMessage'); // New span for loading message
 
-        // Object to store custom commands
-        let customCommands = {};
-        let showAddCommandSection = false; // State to manage visibility
-        let currentUserId = null;
-        let isAuthReady = false;
-        let unsubscribeFirestore = null; // To store the Firestore unsubscribe function
 
         /**
          * Shows or hides the loading overlay with a message.
@@ -197,12 +195,14 @@ Try your custom commands here!'
             loadingMessageSpan.textContent = message;
             if (show) {
                 loadingOverlay.classList.remove('hidden');
+                loadingOverlay.style.opacity = '1';
             } else {
                 // Add a small delay for a smoother transition out
                 loadingOverlay.style.opacity = '0';
                 setTimeout(() => {
                     loadingOverlay.classList.add('hidden');
-                    loadingOverlay.style.opacity = '1'; // Reset opacity for next time
+                    // Ensure message is cleared or reset for next time
+                    loadingMessageSpan.textContent = 'Initializing...';
                 }, 300);
             }
         };
@@ -272,7 +272,6 @@ Try your custom commands here!'
                 appendOutput(`ERROR: Failed to add custom command. ${e.message}`, true);
             } finally {
                 // Loading will be toggled off by onSnapshot's first data load or error handler
-                // Or if there's no listener, we'd toggle it off here directly.
                 // For now, let onSnapshot handle it to indicate data sync.
             }
         };
@@ -428,59 +427,78 @@ Try your custom commands here!'
             }
         });
 
-        // Firebase Authentication and Data Loading
-        onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                currentUserId = user.uid;
-                userIdDisplay.textContent = currentUserId;
-                isAuthReady = true;
-
-                // Stop previous listener if exists
-                if (unsubscribeFirestore) {
-                    unsubscribeFirestore();
+        // Initialize Firebase and Authentication
+        const initializeFirebaseAndAuth = () => {
+            toggleLoading(true, "Initializing Firebase...");
+            try {
+                // Ensure firebaseConfig is not empty
+                if (Object.keys(firebaseConfig).length === 0) {
+                    throw new Error("Firebase config is empty. Please ensure __firebase_config is provided.");
                 }
 
-                // Start listening for custom commands once authenticated
-                toggleLoading(true, "Fetching shared commands...");
-                const customCommandsColRef = collection(db, `artifacts/${appId}/public/data/customCommands`);
-                unsubscribeFirestore = onSnapshot(query(customCommandsColRef), (snapshot) => {
-                    const fetchedCommands = {};
-                    snapshot.forEach((doc) => {
-                        const data = doc.data();
-                        fetchedCommands[data.commandName] = data.commandOutput;
-                    });
-                    customCommands = fetchedCommands;
-                    appendOutput("Custom commands synchronized from shared storage.");
-                    toggleLoading(false, "Ready!"); // Hide loading after data sync
-                }, (error) => {
-                    console.error("Error fetching custom commands: ", error);
-                    appendOutput(`ERROR: Failed to synchronize custom commands: ${error.message}`, true);
-                    toggleLoading(false, "Error loading commands."); // Hide loading on error
-                });
-            } else {
-                // Sign in anonymously if no user is authenticated
-                try {
-                    toggleLoading(true, "Authenticating...");
-                    if (initialAuthToken) {
-                        await signInWithCustomToken(auth, initialAuthToken);
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        currentUserId = user.uid;
+                        userIdDisplay.textContent = currentUserId;
+                        isAuthReady = true;
+
+                        // Stop previous listener if exists
+                        if (unsubscribeFirestore) {
+                            unsubscribeFirestore();
+                        }
+
+                        // Start listening for custom commands once authenticated
+                        toggleLoading(true, "Fetching shared commands...");
+                        const customCommandsColRef = collection(db, `artifacts/${appId}/public/data/customCommands`);
+                        unsubscribeFirestore = onSnapshot(query(customCommandsColRef), (snapshot) => {
+                            const fetchedCommands = {};
+                            snapshot.forEach((doc) => {
+                                const data = doc.data();
+                                fetchedCommands[data.commandName] = data.commandOutput;
+                            });
+                            customCommands = fetchedCommands;
+                            appendOutput("Custom commands synchronized from shared storage.");
+                            toggleLoading(false, "Ready!"); // Hide loading after data sync
+                        }, (error) => {
+                            console.error("Error fetching custom commands: ", error);
+                            appendOutput(`ERROR: Failed to synchronize custom commands: ${error.message}`, true);
+                            toggleLoading(false, "Error loading commands."); // Hide loading on error
+                        });
                     } else {
-                        await signInAnonymously(auth);
+                        // Sign in anonymously if no user is authenticated
+                        try {
+                            toggleLoading(true, "Authenticating...");
+                            if (initialAuthToken) {
+                                await signInWithCustomToken(auth, initialAuthToken);
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+                        } catch (error) {
+                            console.error("Error during anonymous sign-in:", error);
+                            appendOutput(`ERROR: Authentication failed: ${error.message}`, true);
+                            toggleLoading(false, "Authentication failed.");
+                        }
                     }
-                } catch (error) {
-                    console.error("Error during anonymous sign-in:", error);
-                    appendOutput(`ERROR: Authentication failed: ${error.message}`, true);
-                    toggleLoading(false, "Authentication failed.");
-                }
+                });
+            } catch (initError) {
+                console.error("Firebase Initialization Error:", initError);
+                appendOutput(`CRITICAL ERROR: Firebase initialization failed. ${initError.message}. Check your Firebase config.`, true);
+                toggleLoading(false, "Initialization failed.");
             }
-        });
+        };
+
 
         // Initial state for output area
         if (codeOutput.innerHTML.trim() === '') {
             codeOutput.innerHTML = '<span class="text-gray-500">Your output will appear here...</span>';
         }
 
-        // Initially show loading while auth is pending
-        toggleLoading(true, "Initializing...");
+        // Call the initialization function when the script loads
+        initializeFirebaseAndAuth();
     </script>
 </body>
 </html>
