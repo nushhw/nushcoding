@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Simple Coding Language Interpreter</title>
+    <title>NUSH Interpreter</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
@@ -31,7 +31,7 @@
 
     <div class="bg-white rounded-lg shadow-2xl p-6 w-full max-w-2xl flex flex-col space-y-6 relative">
         <h1 class="text-3xl font-bold text-center text-gray-800 mb-4">
-            Simple Code Interpreter
+            NUSH Interpreter
         </h1>
 
         <!-- <div class="text-sm text-gray-600 text-center">
@@ -45,7 +45,7 @@
             aria-label="Toggle Add Command Section"
         ></button>
 
-        <div id="addCommandSection" class="flex flex-col p-4 border border-gray-200 rounded-md bg-gray-100 space-y-3 mt-4 hidden">
+        <div id="addCommandSection" class="flex flex-col p-4 border border-gray-200 rounded-md bg-gray-100 space-y-3 mt-4">
             <h2 class="text-xl font-semibold text-gray-700">Add New Custom Command</h2>
             <div>
                 <label for="new-command-name" class="block text-sm font-medium text-gray-600">Command Name:</label>
@@ -144,7 +144,7 @@ Add custom commands using the hidden dot at the top right!'
 
         // Object to store custom commands (now local to the browser session)
         let customCommands = {};
-        let showAddCommandSection = false; // State to manage visibility
+        let showAddCommandSection = true; // State to manage visibility - now true by default
 
         /**
          * Scrolls the output area to the bottom.
