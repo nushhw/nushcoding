@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NUSH CODING INTERPRETER</title>
+    <title>NUSH Language Interpreter</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
@@ -31,12 +31,15 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(255, 255, 255, 0.8);
+            background: rgba(255, 255, 255, 0.9); /* Slightly more opaque */
             display: flex;
+            flex-direction: column; /* Stack spinner and text */
             justify-content: center;
             align-items: center;
             z-index: 10;
             border-radius: 0.5rem; /* rounded-lg */
+            gap: 1rem; /* Space between spinner and text */
+            transition: opacity 0.3s ease; /* Smooth transition for hiding */
         }
         .spinner {
             border: 4px solid rgba(0, 0, 0, 0.1);
@@ -104,7 +107,7 @@
             <textarea
                 id="code-input"
                 class="w-full p-4 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-gray-800 bg-gray-50 resize-y min-h-[150px]"
-                placeholder='~~ tell xinyuan for a command. a command can be added without changing code, so it will be immediate ~~ Example:
+                placeholder='~~ tell xinyuan to add a command. it will be immediate since no code needs to be change when adding command. ~~ Example:
 PRINT "Hello, NUSH!"
 SQUAREROOT 81
 FOR 3 REPEAT LAUGH
@@ -144,8 +147,9 @@ Try your custom commands here!'
             </div>
         </div>
 
-        <div id="loadingOverlay" class="loading-overlay hidden">
+        <div id="loadingOverlay" class="loading-overlay">
             <div class="spinner"></div>
+            <span id="loadingMessage" class="text-gray-800 font-semibold text-lg">Loading...</span>
         </div>
     </div>
 
@@ -175,22 +179,31 @@ Try your custom commands here!'
         const addCustomCommandBtn = document.getElementById('addCustomCommandBtn');
         const userIdDisplay = document.getElementById('userIdDisplay');
         const loadingOverlay = document.getElementById('loadingOverlay');
+        const loadingMessageSpan = document.getElementById('loadingMessage'); // New span for loading message
 
         // Object to store custom commands
         let customCommands = {};
         let showAddCommandSection = false; // State to manage visibility
         let currentUserId = null;
         let isAuthReady = false;
+        let unsubscribeFirestore = null; // To store the Firestore unsubscribe function
 
         /**
-         * Shows or hides the loading overlay.
+         * Shows or hides the loading overlay with a message.
          * @param {boolean} show True to show, false to hide.
+         * @param {string} message The message to display.
          */
-        const toggleLoading = (show) => {
+        const toggleLoading = (show, message = 'Loading...') => {
+            loadingMessageSpan.textContent = message;
             if (show) {
                 loadingOverlay.classList.remove('hidden');
             } else {
-                loadingOverlay.classList.add('hidden');
+                // Add a small delay for a smoother transition out
+                loadingOverlay.style.opacity = '0';
+                setTimeout(() => {
+                    loadingOverlay.classList.add('hidden');
+                    loadingOverlay.style.opacity = '1'; // Reset opacity for next time
+                }, 300);
             }
         };
 
@@ -240,7 +253,7 @@ Try your custom commands here!'
                 return;
             }
 
-            toggleLoading(true);
+            toggleLoading(true, "Adding command...");
             try {
                 // Store in a public collection
                 const customCommandsColRef = collection(db, `artifacts/${appId}/public/data/customCommands`);
@@ -252,12 +265,15 @@ Try your custom commands here!'
                 });
                 newCommandNameInput.value = '';
                 newCommandOutputInput.value = '';
-                appendOutput(`Custom command '${commandName}' added successfully!`);
+                // Output will be updated by onSnapshot listener
+                appendOutput(`Custom command '${commandName}' sent for addition.`);
             } catch (e) {
                 console.error("Error adding document: ", e);
                 appendOutput(`ERROR: Failed to add custom command. ${e.message}`, true);
             } finally {
-                toggleLoading(false);
+                // Loading will be toggled off by onSnapshot's first data load or error handler
+                // Or if there's no listener, we'd toggle it off here directly.
+                // For now, let onSnapshot handle it to indicate data sync.
             }
         };
 
@@ -418,9 +434,16 @@ Try your custom commands here!'
                 currentUserId = user.uid;
                 userIdDisplay.textContent = currentUserId;
                 isAuthReady = true;
+
+                // Stop previous listener if exists
+                if (unsubscribeFirestore) {
+                    unsubscribeFirestore();
+                }
+
                 // Start listening for custom commands once authenticated
+                toggleLoading(true, "Fetching shared commands...");
                 const customCommandsColRef = collection(db, `artifacts/${appId}/public/data/customCommands`);
-                onSnapshot(query(customCommandsColRef), (snapshot) => {
+                unsubscribeFirestore = onSnapshot(query(customCommandsColRef), (snapshot) => {
                     const fetchedCommands = {};
                     snapshot.forEach((doc) => {
                         const data = doc.data();
@@ -428,14 +451,16 @@ Try your custom commands here!'
                     });
                     customCommands = fetchedCommands;
                     appendOutput("Custom commands synchronized from shared storage.");
+                    toggleLoading(false, "Ready!"); // Hide loading after data sync
                 }, (error) => {
                     console.error("Error fetching custom commands: ", error);
                     appendOutput(`ERROR: Failed to synchronize custom commands: ${error.message}`, true);
+                    toggleLoading(false, "Error loading commands."); // Hide loading on error
                 });
             } else {
                 // Sign in anonymously if no user is authenticated
                 try {
-                    toggleLoading(true);
+                    toggleLoading(true, "Authenticating...");
                     if (initialAuthToken) {
                         await signInWithCustomToken(auth, initialAuthToken);
                     } else {
@@ -444,8 +469,7 @@ Try your custom commands here!'
                 } catch (error) {
                     console.error("Error during anonymous sign-in:", error);
                     appendOutput(`ERROR: Authentication failed: ${error.message}`, true);
-                } finally {
-                    toggleLoading(false);
+                    toggleLoading(false, "Authentication failed.");
                 }
             }
         });
@@ -454,6 +478,9 @@ Try your custom commands here!'
         if (codeOutput.innerHTML.trim() === '') {
             codeOutput.innerHTML = '<span class="text-gray-500">Your output will appear here...</span>';
         }
+
+        // Initially show loading while auth is pending
+        toggleLoading(true, "Initializing...");
     </script>
 </body>
 </html>
